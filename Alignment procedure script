@@ -1,0 +1,245 @@
+clear all
+close all
+
+%% Here we set the parameters to run the scrript
+
+rs = 800;  % Set the height range of the height map when plotted
+n = 1; % set the degre of the fiting polynomial
+ps = 87.89;  % Size of 1 pixel, this is equal to the scan size divided by the number of pixels, it's in nm
+m = 4; % scaling parameter for the plots
+rot_angle = 0; % rotation angle to apply 
+lat_long_shift_value = 0; % amount of vertical and lateral shift to realign the two surfaces, in pixel
+vert_shit_value = 0 % height shift value to try to find best alignment. It can stay if the maps are normalized
+tilt_values = 0 % Multiplying factor range to play with the roll and pitch tiltbetween the two images
+range = 130; % 1/2 number of pixels taken (lateraly and verticaly) to crop the image after optimal alignment, select how large you want the region to be: + and - the range in both axis
+
+
+%% Load the imported height maps. Use the "import data" function in matlab to import your csv, txt, etc file as a numerical matrix
+
+height_map_before = load('your_matlab_numerical_matrix_before')
+height_map_after = load('your_matlab_numerical_matrix_after')
+
+%% Here we put the height maps in nm, or other unit that suits the user
+
+height_map_before = height_map_before*10^9; % used to optimize the alignment
+height_map_before_original = height_map_before; % used to define the difference height map
+height_map_after_norot = height_map_before*10^9;
+
+%% Here we rotate one image to the other by 10 degres, tis value will differ depending on the data
+
+height_map_after = imrotate(height_map_after_norot, rot_angle) 
+
+%% Here we crop the two images after the rotation correction to make them even in size (imrotate modifies the map size)
+
+center_before_no_align = [ceil(numel(height_map_before(1,:))/2),ceil(numel(height_map_before(:,1))/2)]; %select a centering region for the pre-test surface to overlap the two data afterhand
+center_after = [ceil(numel(height_map_after(1,:))/2),ceil(numel(height_map_after(:,1))/2)]; %select a centering region for the post-test surface to overlap the two data afterhand
+
+height_map_before = height_map_before(center_before_no_align(1)-range:center_before_no_align(1)+range,center_before_no_align(2)-range:center_before_no_align(2)+range); %% define the new image size
+
+height_map_after = height_map_after(center_after(1)-range:center_after(1)+range,center_after(2)-range:center_after_(2)+range); %% define the new image size
+
+
+%% Remove relative tilt of each image. This decrease the tilt correction brought later on
+
+x = (1:length(height_map_before))*ps;
+y = (1:length(height_map_after))*ps;
+ 
+for i=1:length(height_map_before(:,1))
+    p = polyfit(x,height_map_before(i,:),n); % build a polynomial fit of degree n to flatten the data
+    height_map_before(i,:) = height_map_before(i,:) - polyval(p,x);
+end
+
+ 
+for i=1:length(height_map_after(:,1))
+    p = polyfit(y,height_map_after(i,:),n);% build a polynomial fit of degree n to flatten the data
+    height_map_after(i,:) = height_map_after(i,:) - polyval(p,y);
+end
+
+
+%% In this section, the maps are noramalized. Then the positive heights are brought to 0 in order to perform the alignment only on negative features.
+
+height_map_before_norm = height_map_before-mean(mean(height_map_before));  % The maps are normalized
+height_map_after_norm = height_map_after-mean(mean(height_map_after));
+
+height_map_before_neg = min(height_map_before_norm,0); % The positive heights are set to 0 to align only on negative features (unworn part of the surface)
+height_map_after_neg = min(height_map_after_norm,0);
+
+%% Apply the shift optimization function to find the optimal vertical and horizontal shift from one map to the other
+
+min_overlap = shift_optimization(height_map_before_neg,height_map_after_neg,lat_long_shift_value);
+
+[opt_shift_value, shift_index] = min(min_overlap(:)); % We define here the optimal shit value
+[I,J] = ind2sub([size(min_overlap,1) size(min_overlap,2)], shift_index);
+
+opti_index_shift = [I,J];
+
+%% Here we add to the analysis the plane tilt 
+
+out_tilt = optimizing_tilt(height_map_before_neg, height_map_after_neg, -0.1); % We use the tilting function
+[opt_tilt_value, tilt_index] = min(min(out_tilt(:))) ; % We set here the optimal tilt value
+
+for i=1:length(post_image) % this is the loop to correct a tilt, not sure it's that of a need as the data are already flatten
+   for j = 1:length(post_image)
+       post_image_tilt(i,j) = post_image(i,j)+h*i+g*j; % the loop is based on two coefficient that shift up or down each pixels, according to their number.
+           
+   end
+end
+
+%% We redefine a new center and re-crop the pre-height map to have it optimally align with the post-image. We also re-apply the polynomial fit in case of the the alignment procedure influenced the shape of the data
+
+center_aligned = [center_before(1)+J, center_before(2)+I]; % optimal alignment based on only neg values
+
+% Take the original height map before and crop it with the optimal alignment parameters determined above.
+
+height_map_before = height_map_before_original(center_aligned(1)-range:center_aligned(1)+range,center_aligned(2)-range:center_aligned(2)+range); %% define the new image size
+
+t = (1:length(height_map_before))*ps;
+ 
+for i=1:length(height_map_before(:,1))
+    p = polyfit(t,height_map_before(i,:),n);
+    height_map_before(i,:) = height_map_before(i,:) - polyval(p,t);
+end
+
+
+%% This section corrects the height shift between the two images
+
+opti_height_shift = optimizing_height_diff(height_map_before, height_map_after, vert_shit_value)
+
+height_map_before = height_map_before + opti_height_shift
+
+%% We define the difference image here, save the corresponding height maps and plot it
+
+height_map_difference = height_map_after - height_map_before
+
+height_map_difference_reshaped = reshape(height_map_difference, length(height_map_difference(:,1))*length(height_map_difference(1,:)),1);;
+height_change_sensitivty = mean(std(height_map_difference));
+
+
+save('enter_your_saved_file_name.mat','height_map_difference')
+save('enter_your_saved_file_name.mat','height_map_before')
+save('enter_your_saved_file_name.mat','height_map_after')
+
+ 
+%% The functions used in the scipt are here
+
+function out = shift_optimization(pre_image,post_image,c) %Build the function that takes as an input Im_fluor: a serie of matrices stacked on top of each other, c is the range over which we try to overlap
+
+tmp = pre_image(:,:);  %select the pre_image matrix
+img = post_image(:,:);  %select the post_image matrix
+
+pos1 = [ceil(numel(tmp(1,:))/2),ceil(numel(tmp(:,1))/2)]; % find automatically the x and y coordinates of the common starting point (center because cropped beforehand) for tmp. Can also enter the coordinates manually
+pos2 = [ceil(numel(img(1,:))/2),ceil(numel(img(:,1))/2)]; % do the same but for the other image img
+
+pos_1 = pos1;
+pos_2 = pos2;
+pos = pos_1;
+
+e = round(pos(1)); % rounded x axis pos coordinate
+d = round(pos(2)); % rounded y axis pos coordinate
+
+diff = NaN(2*c+1,2*c+1); % define the difference between the two images
+
+for i = -c+d:c+d  % double loop that will successively shift one image to the other and caculate the difference between the two. If stops when it find the position where the difference is minimal.
+    for j = -c+e:c+e
+        if i>=0&&j>=0
+            diff(i+c+1-d,j+c+1-e) = mean(std(abs(img(i+1:end,j+1:end)-tmp(1:end-i,1:end-j))));
+        elseif i<0&&j>=0
+            diff(i+c+1-d,j+c+1-e) = mean(std(abs(img(1:end+i,j+1:end)-tmp(abs(i)+1:end,1:end-j))));
+        elseif i>=0&&j<0
+            diff(i+c+1-d,j+c+1-e) = mean(std(abs(img(i+1:end,1:end+j)-tmp(1:end-i,abs(j)+1:end))));
+        elseif i<0&&j<0
+            diff(i+c+1-d,j+c+1-e) = mean(std(abs(img(1:end+i,1:end+j)-tmp(abs(i)+1:end,abs(j)+1:end))));
+        end
+
+    end
+end
+
+out = diff;
+
+end
+
+
+function out1 = optimizing_tilt(pre_image,post_image,iteration)
+
+a = -0.1:iteration:-2.0
+b = -0.1:iteration:-2.0
+
+ita = 1;
+itb = 1;
+
+
+tilt = 1:400;
+
+for h = a
+    for g = b
+        
+        for i=1:length(post_image) % this is the loop to correct a tilt, not sure it's that of a need as the data are already flatten
+           for j = 1:length(post_image)
+               post_image_tilt(i,j) = post_image(i,j)+h*i+g*j; % the loop is based on two coefficient that shift up or down each pixels, according to their number.
+           
+           end
+        end
+        
+        difference_tilt = mean(std(post_image_tilt - pre_image));
+        disp(difference_tilt)
+        tilt(itb) = difference_tilt;
+         
+        itb = itb +1
+         
+    end
+    
+end
+
+out1 = reshape((tilt),[20,20]);
+
+end
+ 
+function out4 = optimizing_height_diff(pre_image, post_image, shiftval);
+
+rs = 800;
+m =4;
+c = shiftval;
+a_pre = pre_image(:);
+a_post = post_image(:);
+
+
+binwidth = 2;
+bins = -rs:binwidth:rs;
+bincounts_pre = histc(a_pre,bins);
+bincounts_post = histc(a_post,bins);
+y_pre = bincounts_pre;
+y_post = bincounts_post;
+x_pre = bins;
+x_post = bins;
+
+diff = NaN(2*c,1); % define the difference between the two distribution
+
+    for i = -c:1:c  % double loop that will sccessively shift one image to the other and caculate the difference between the two. If stops when it find the position where the difference is minimal.
+    
+            if i<0
+                ilow_pre = y_pre;
+                ilow_post = y_post;
+                ilow_pre = ilow_pre(abs(i)+1:end);
+                ilow_post = ilow_post(1:end-abs(i));
+                diff(i+c+1) = mean(abs(ilow_post-ilow_pre));
+            elseif i==0
+                lol_pre = y_pre;
+                lol_post = y_post;
+                diff(i+c+1) = mean(abs(lol_post-lol_pre));
+            elseif i>0
+                ihigh_pre = y_pre;
+                ihigh_post = y_post;
+                ihigh_pre = ihigh_pre(1:end-abs(i));
+                ihigh_post = ihigh_post(abs(i)+1:end);
+                diff(i+c+1) = mean(abs(ihigh_post-ihigh_pre));
+
+            end
+    end
+
+[opt_shift_value, shift_index] = min(diff(:));
+optimal_displacement = shift_index-c-1;
+
+
+out4 = opt_shift_value
+
+end
